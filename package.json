@@ -1,0 +1,55 @@
+{
+  "name": "@thezelijah/majik-user",
+  "type": "module",
+  "description": "Majik User is a framework-agnostic, strongly typed user domain model for managing identity, profile data, verification state, and application settings in modern apps and websites. It’s designed to be extensible, serializable, and safe by default, acting as a single source of truth for user data across frontends, backends, and auth providers.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "author": "Zelijah",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jedlsf/majik-user.git"
+  },
+  "keywords": [
+    "user",
+    "user-model",
+    "user-management",
+    "identity",
+    "profile",
+    "account",
+    "auth",
+    "authentication",
+    "authorization",
+    "verification",
+    "domain-model",
+    "data-model",
+    "typescript",
+    "framework-agnostic",
+    "supabase",
+    "web-app",
+    "backend",
+    "frontend",
+    "shared-model",
+    "serialization",
+    "majik",
+    "majik-user"
+  ],
+  "homepage": "https://github.com/jedlsf/majik-user#readme",
+  "bugs": {
+    "url": "https://github.com/jedlsf/majik-user/issues"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@stablelib/sha256": "^2.0.1",
+    "uuid": "^13.0.0"
+  }
+}
