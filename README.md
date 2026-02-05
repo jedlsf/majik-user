@@ -2,9 +2,9 @@
 
 [![Developed by Zelijah](https://img.shields.io/badge/Developed%20by-Zelijah-red?logo=github&logoColor=white)](https://thezelijah.world)
 
-**Majik User** is a framework-agnostic, strongly typed user domain model for modern applications and websites. It provides a clean, extensible foundation for managing user identity, profile data, verification state, and application settings—without coupling your app to a specific database, backend, or auth provider.
+**Majik User** is a framework-agnostic, **self-defending** user domain model for modern applications. It provides a strongly typed foundation for managing identity, profile data, and settings, with built-in XSS protection and input sanitization baked directly into the class logic.
 
-This package is designed to be used **across frontends, backends, and shared libraries** as a single source of truth for user data and behavior.
+This package is designed to be the **isomorphic source of truth**—ensuring that user data remains clean, validated, and secure as it moves between your frontend, backend, and database.
 
 ![npm](https://img.shields.io/npm/v/@thezelijah/majik-user) ![npm downloads](https://img.shields.io/npm/dm/@thezelijah/majik-user) ![npm bundle size](https://img.shields.io/bundlephobia/min/%40thezelijah%2Fmajik-user) [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) ![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue)
 
@@ -15,6 +15,7 @@ This package is designed to be used **across frontends, backends, and shared lib
 - [Majik User](#majik-user)
   - [Why Majik User?](#why-majik-user)
   - [Features](#features)
+    - [Security \& Integrity](#security--integrity)
     - [Core User Management](#core-user-management)
     - [Rich Profile Metadata](#rich-profile-metadata)
     - [Verification System](#verification-system)
@@ -22,9 +23,11 @@ This package is designed to be used **across frontends, backends, and shared lib
     - [Serialization \& Interop](#serialization--interop)
     - [Developer Ergonomics](#developer-ergonomics)
   - [Installation](#installation)
+    - [Using Cloudflare Workers?](#using-cloudflare-workers)
   - [Usage](#usage)
     - [Initializing a New User](#initializing-a-new-user)
     - [Updating User Data](#updating-user-data)
+      - [Security in Action](#security-in-action)
       - [Basic Info](#basic-info)
       - [Profile Metadata](#profile-metadata)
       - [Birthdate](#birthdate)
@@ -39,6 +42,7 @@ This package is designed to be used **across frontends, backends, and shared lib
       - [Parse from JSON](#parse-from-json)
       - [Public-safe JSON (no sensitive data)](#public-safe-json-no-sensitive-data)
   - [Extending Majik User](#extending-majik-user)
+  - [Data Integrity \& Security](#data-integrity--security)
   - [Supabase Integration (Optional)](#supabase-integration-optional)
     - [Public Signup (POST `/api/users`)](#public-signup-post-apiusers)
       - [Why this works well](#why-this-works-well)
@@ -58,6 +62,8 @@ This package is designed to be used **across frontends, backends, and shared lib
 
 ## Why Majik User?
 
+**Secure by Default: Built-in XSS protection and protocol-safe URI validation—no "dirty" data enters your system.**
+
 Most apps scatter user logic across:
 - database schemas
 - auth provider objects
@@ -76,6 +82,12 @@ It is:
 ---
 
 ## Features
+
+### Security & Integrity
+- **XSS Defense:** Automatic sanitization of all string inputs using DOMPurify.
+- **Self-Defending Setters:** Setters validate and clean data in real-time before it reaches the internal state.
+- **Safe URI Enforcement:** Profile pictures and social links are restricted to safe protocols (`https, base64, etc.`), blocking javascript: injection.
+- **Readonly State:** Getters return deep copies or readonly versions of data to prevent accidental state mutation.
 
 ### Core User Management
 - Unique user ID generation (UUID)
@@ -125,6 +137,20 @@ It is:
 npm install @thezelijah/majik-user
 ```
 
+### Using Cloudflare Workers? 
+
+Majik User uses isomorphic-dompurify for high-grade security. To run this in a Cloudflare Worker environment, you must **enable Node.js compatibility** in your wrangler configuration.
+
+Add the following to your wrangler.json (or .toml):
+
+```json
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "compatibility_date": "2025-09-27",
+  "compatibility_flags": ["nodejs_compat"]
+}
+```
+
 ---
 
 ## Usage
@@ -167,6 +193,33 @@ const user = MajikUser.initialize(
 ```
 
 ### Updating User Data
+
+
+#### Security in Action
+
+```ts
+
+
+// 1. Protection against XSS
+try {
+  user.displayName = "<script>alert('hacked')</script> Josef";
+} catch (e) {
+  // Throws: "Display name contains suspicious HTML tags"
+}
+
+// 2. Protocol Safety
+try {
+  user.setPicture("javascript:alert('xss')");
+} catch (e) {
+  // Throws: "Invalid or unsafe URL protocol detected."
+}
+
+// 3. Auto-Sanitization on Metadata
+user.setMetadata("bio", "I love <b>coding</b> <img src=x onerror=alert(1)>");
+console.log(user.metadata.bio); 
+// Output: "I love <b>coding</b>" (Harmful tags stripped automatically)
+
+```
 
 #### Basic Info
 
@@ -322,6 +375,9 @@ user.hasCompleteProfile();
 
 ### Validation
 
+This validates not just formats, but also scans the entire user object (including nested addresses and social links) for malicious HTML/XSS injection.
+
+
 ```ts
 
 
@@ -410,6 +466,19 @@ const user = MajikUser.initialize<MyAppUserMetadata>(
 
 ```
 Now your app has a fully typed, domain-safe user model.
+
+---
+
+## Data Integrity & Security
+
+Majik User ensures that your data is not only well-structured but also safe and meaningful across your entire stack.
+
+| Feature                | Description                                                                          |
+| :--------------------- | :----------------------------------------------------------------------------------- |
+| **Isomorphic**         | Runs everywhere—Works seamlessly in the Browser, Node.js, and Edge Functions.        |
+| **Smart Mapping**      | Automatically normalizes messy, flat metadata into structured, nested objects.       |
+| **Calculated Getters** | Values like `.age`, `.initials`, and `.isFullyVerified` are computed on the fly.     |
+| **XSS-Proof**          | Integrated protection via `DOMPurify` on every setter to block malicious injections. |
 
 ---
 

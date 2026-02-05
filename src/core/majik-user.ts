@@ -1,4 +1,10 @@
-import { arrayToBase64, dateToYYYYMMDD, stripUndefined } from "../utils";
+import {
+  arrayToBase64,
+  checkForHTMLTags,
+  dateToYYYYMMDD,
+  sanitizeInput,
+  stripUndefined,
+} from "../utils";
 
 import { v4 as uuidv4 } from "uuid";
 import { hash } from "@stablelib/sha256";
@@ -75,6 +81,10 @@ export class MajikUser<
       throw new Error("Display name cannot be empty");
     }
 
+    if (checkForHTMLTags(displayName)) {
+      throw new Error("Display name contains suspicious HTML tags");
+    }
+
     const userID = !id?.trim() ? MajikUser.generateID() : id;
 
     const instance = new this({
@@ -141,6 +151,8 @@ export class MajikUser<
       createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
       lastUpdate: data.lastUpdate ? new Date(data.lastUpdate) : new Date(),
     };
+
+    MajikUser.validateAndSanitizeUserData(userData);
 
     return new this(userData);
   }
@@ -251,6 +263,8 @@ export class MajikUser<
       lastUpdate: new Date(supabaseUser.updated_at || supabaseUser.created_at),
     };
 
+    MajikUser.validateAndSanitizeUserData(userData);
+
     return new this(userData);
   }
 
@@ -300,6 +314,21 @@ export class MajikUser<
     if (!name || !name?.first_name?.trim() || !name?.last_name?.trim()) {
       throw new Error("Full name must contain first and last names");
     }
+
+    // ADD THIS:
+    if (checkForHTMLTags(name.first_name)) {
+      throw new Error("First name contains suspicious HTML tags");
+    }
+    if (checkForHTMLTags(name.last_name)) {
+      throw new Error("Last name contains suspicious HTML tags");
+    }
+    if (name.middle_name && checkForHTMLTags(name.middle_name)) {
+      throw new Error("Middle name contains suspicious HTML tags");
+    }
+    if (name.suffix && checkForHTMLTags(name.suffix)) {
+      throw new Error("Suffix contains suspicious HTML tags");
+    }
+
     this._metadata.name = name;
     this.updateTimestamp();
   }
@@ -453,6 +482,10 @@ export class MajikUser<
     if (!value || value.trim().length === 0) {
       throw new Error("Display name cannot be empty");
     }
+
+    if (checkForHTMLTags(value)) {
+      throw new Error("Display name contains suspicious HTML tags");
+    }
     this._displayName = value;
     this.updateTimestamp();
   }
@@ -471,6 +504,19 @@ export class MajikUser<
    * Update user's full name
    */
   setName(name: FullName): void {
+    // Validate for HTML tags in all name fields
+    if (name.first_name && checkForHTMLTags(name.first_name)) {
+      throw new Error("First name contains suspicious HTML tags");
+    }
+    if (name.last_name && checkForHTMLTags(name.last_name)) {
+      throw new Error("Last name contains suspicious HTML tags");
+    }
+    if (name.middle_name && checkForHTMLTags(name.middle_name)) {
+      throw new Error("Middle name contains suspicious HTML tags");
+    }
+    if (name.suffix && checkForHTMLTags(name.suffix)) {
+      throw new Error("Suffix contains suspicious HTML tags");
+    }
     this.updateMetadata({ name } as Partial<TMetadata>);
   }
 
@@ -478,6 +524,11 @@ export class MajikUser<
    * Update user's profile picture
    */
   setPicture(url: string): void {
+    // Simple check: if it's not a relative path, ensure it's http/https/base64
+    const isSafeProtocol = /^(https?:\/\/|data:image\/|\/|#)/i.test(url);
+    if (!isSafeProtocol && url.length > 0) {
+      throw new Error("Invalid or unsafe URL protocol detected.");
+    }
     this.updateMetadata({ picture: url } as Partial<TMetadata>);
   }
 
@@ -496,6 +547,21 @@ export class MajikUser<
    * Update user's address
    */
   setAddress(address: Address): void {
+    // Validate all address string fields for HTML tags
+    const addressFields = [
+      { name: "building", value: address.building },
+      { name: "street", value: address.street },
+      { name: "area", value: address.area },
+      { name: "city", value: address.city },
+      { name: "region", value: address.region },
+      { name: "country", value: address.country },
+    ];
+
+    for (const { name, value } of addressFields) {
+      if (value && checkForHTMLTags(value)) {
+        throw new Error(`Address ${name} contains suspicious HTML tags`);
+      }
+    }
     this.updateMetadata({ address } as Partial<TMetadata>);
   }
 
@@ -536,6 +602,9 @@ export class MajikUser<
    * Update user's bio
    */
   setBio(bio: string): void {
+    if (bio && checkForHTMLTags(bio)) {
+      throw new Error("Bio contains suspicious HTML tags");
+    }
     this.updateMetadata({ bio } as Partial<TMetadata>);
   }
 
@@ -543,6 +612,9 @@ export class MajikUser<
    * Update user's language preference
    */
   setLanguage(language: string): void {
+    if (language && checkForHTMLTags(language)) {
+      throw new Error("Language contains suspicious HTML tags");
+    }
     this.updateMetadata({ language } as Partial<TMetadata>);
   }
 
@@ -550,6 +622,9 @@ export class MajikUser<
    * Update user's timezone
    */
   setTimezone(timezone: string): void {
+    if (timezone && checkForHTMLTags(timezone)) {
+      throw new Error("Timezone contains suspicious HTML tags");
+    }
     this.updateMetadata({ timezone } as Partial<TMetadata>);
   }
 
@@ -557,6 +632,14 @@ export class MajikUser<
    * Add or update a social link
    */
   setSocialLink(platform: string, url: string): void {
+    if (platform && checkForHTMLTags(platform)) {
+      throw new Error(
+        "Social link platform name contains suspicious HTML tags",
+      );
+    }
+    if (url && checkForHTMLTags(url)) {
+      throw new Error("Social link URL contains suspicious HTML tags");
+    }
     const socialLinks = { ...this._metadata.social_links, [platform]: url };
     this.updateMetadata({ social_links: socialLinks } as Partial<TMetadata>);
   }
@@ -576,7 +659,13 @@ export class MajikUser<
    * Update a specific metadata field
    */
   setMetadata(key: keyof TMetadata, value: TMetadata[typeof key]): void {
-    this._metadata[key] = value;
+    let finalValue = value;
+
+    // If the value being set is a string, sanitize it first
+    if (typeof value === "string") {
+      finalValue = sanitizeInput(value) as TMetadata[typeof key];
+    }
+    this._metadata[key] = finalValue;
     this.updateTimestamp();
   }
   /**
@@ -858,6 +947,58 @@ export class MajikUser<
       }
     }
 
+    // HTML/XSS validation for string fields
+    const stringFieldsToCheck: { field: string; value: string | undefined }[] =
+      [
+        { field: "displayName", value: this._displayName },
+        { field: "email", value: this._email },
+        { field: "bio", value: this._metadata.bio },
+        { field: "first_name", value: this._metadata.name?.first_name },
+        { field: "last_name", value: this._metadata.name?.last_name },
+        { field: "middle_name", value: this._metadata.name?.middle_name },
+        { field: "suffix", value: this._metadata.name?.suffix },
+      ];
+
+    for (const { field, value } of stringFieldsToCheck) {
+      if (value && checkForHTMLTags(value)) {
+        errors.push(`Suspicious HTML tags detected in ${field}`);
+      }
+    }
+
+    // Check address fields for HTML tags
+    if (this._metadata.address) {
+      const addressFields: { field: string; value: string | undefined }[] = [
+        { field: "address.building", value: this._metadata.address.building },
+        { field: "address.street", value: this._metadata.address.street },
+        { field: "address.area", value: this._metadata.address.area },
+        { field: "address.city", value: this._metadata.address.city },
+        { field: "address.region", value: this._metadata.address.region },
+        { field: "address.country", value: this._metadata.address.country },
+      ];
+
+      for (const { field, value } of addressFields) {
+        if (value && checkForHTMLTags(value)) {
+          errors.push(`Suspicious HTML tags detected in ${field}`);
+        }
+      }
+    }
+
+    // Check social links for suspicious content
+    if (this._metadata.social_links) {
+      Object.entries(this._metadata.social_links).forEach(([platform, url]) => {
+        if (checkForHTMLTags(platform)) {
+          errors.push(
+            `Suspicious HTML tags detected in social link platform: ${platform}`,
+          );
+        }
+        if (checkForHTMLTags(url)) {
+          errors.push(
+            `Suspicious HTML tags detected in social link URL for ${platform}`,
+          );
+        }
+      });
+    }
+
     return {
       isValid: errors.length === 0,
       errors,
@@ -975,5 +1116,79 @@ export class MajikUser<
   protected static hashID(id: string): string {
     const hashedID = hash(new TextEncoder().encode(id));
     return arrayToBase64(hashedID);
+  }
+
+  /**
+   * Validate and sanitize user data from external sources
+   */
+  private static validateAndSanitizeUserData(
+    data: Partial<MajikUserData<any>>,
+  ): void {
+    // Validate displayName
+    if (data.displayName && checkForHTMLTags(data.displayName)) {
+      throw new Error("Display name contains suspicious HTML tags");
+    }
+
+    // Validate metadata fields
+    if (data.metadata) {
+      const meta = data.metadata;
+
+      if (meta.bio && checkForHTMLTags(meta.bio)) {
+        throw new Error("Bio contains suspicious HTML tags");
+      }
+
+      if (meta.name) {
+        if (meta.name.first_name && checkForHTMLTags(meta.name.first_name)) {
+          throw new Error("First name contains suspicious HTML tags");
+        }
+        if (meta.name.last_name && checkForHTMLTags(meta.name.last_name)) {
+          throw new Error("Last name contains suspicious HTML tags");
+        }
+        if (meta.name.middle_name && checkForHTMLTags(meta.name.middle_name)) {
+          throw new Error("Middle name contains suspicious HTML tags");
+        }
+        if (meta.name.suffix && checkForHTMLTags(meta.name.suffix)) {
+          throw new Error("Suffix contains suspicious HTML tags");
+        }
+      }
+
+      if (meta.address) {
+        const addressFields = [
+          { name: "building", value: meta.address.building },
+          { name: "street", value: meta.address.street },
+          { name: "area", value: meta.address.area },
+          { name: "city", value: meta.address.city },
+          { name: "region", value: meta.address.region },
+          { name: "country", value: meta.address.country },
+        ];
+
+        for (const { name, value } of addressFields) {
+          if (value && checkForHTMLTags(value)) {
+            throw new Error(`Address ${name} contains suspicious HTML tags`);
+          }
+        }
+      }
+
+      if (meta.social_links) {
+        Object.entries(meta.social_links).forEach(([platform, url]) => {
+          if (checkForHTMLTags(platform)) {
+            throw new Error(
+              `Social link platform contains suspicious HTML tags`,
+            );
+          }
+          if (checkForHTMLTags(url as string)) {
+            throw new Error(`Social link URL contains suspicious HTML tags`);
+          }
+        });
+      }
+
+      if (meta.language && checkForHTMLTags(meta.language)) {
+        throw new Error("Language contains suspicious HTML tags");
+      }
+
+      if (meta.timezone && checkForHTMLTags(meta.timezone)) {
+        throw new Error("Timezone contains suspicious HTML tags");
+      }
+    }
   }
 }
