@@ -1,6 +1,6 @@
 # Majik User
 
-[![Developed by Zelijah](https://img.shields.io/badge/Developed%20by-Zelijah-red?logo=github&logoColor=white)](https://thezelijah.world)
+[![Developed by Zelijah](https://img.shields.io/badge/Developed%20by-Zelijah-red?logo=github&logoColor=white)](https://thezelijah.world) ![GitHub Sponsors](https://img.shields.io/github/sponsors/jedlsf?style=plastic&label=Sponsors&link=https%3A%2F%2Fgithub.com%2Fsponsors%2Fjedlsf)
 
 **Majik User** is a framework-agnostic, **self-defending** user domain model for modern applications. It provides a strongly typed foundation for managing identity, profile data, and settings, with built-in XSS protection and input sanitization baked directly into the class logic.
 

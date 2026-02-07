@@ -152,7 +152,7 @@ export class MajikUser<
       lastUpdate: data.lastUpdate ? new Date(data.lastUpdate) : new Date(),
     };
 
-    MajikUser.validateAndSanitizeUserData(userData);
+    MajikUser.validateAndSanitizeUserData(userData, true);
 
     return new this(userData);
   }
@@ -1130,10 +1130,15 @@ export class MajikUser<
    */
   private static validateAndSanitizeUserData(
     data: Partial<MajikUserData<any>>,
+    sanitize = false,
   ): void {
     // Validate displayName
     if (data.displayName && checkForHTMLTags(data.displayName)) {
-      throw new Error("Display name contains suspicious HTML tags");
+      if (sanitize) {
+        data.displayName = sanitizeInput(data.displayName);
+      } else {
+        throw new Error("Display name contains suspicious HTML tags");
+      }
     }
 
     // Validate metadata fields
@@ -1141,60 +1146,134 @@ export class MajikUser<
       const meta = data.metadata;
 
       if (meta.bio && checkForHTMLTags(meta.bio)) {
-        throw new Error("Bio contains suspicious HTML tags");
+        if (sanitize) {
+          meta.bio = sanitizeInput(meta.bio);
+        } else {
+          throw new Error("Bio contains suspicious HTML tags");
+        }
       }
 
       if (meta.name) {
         if (meta.name.first_name && checkForHTMLTags(meta.name.first_name)) {
-          throw new Error("First name contains suspicious HTML tags");
+          if (sanitize) {
+            meta.name.first_name = sanitizeInput(meta.name.first_name);
+          } else {
+            throw new Error("First name contains suspicious HTML tags");
+          }
         }
         if (meta.name.last_name && checkForHTMLTags(meta.name.last_name)) {
-          throw new Error("Last name contains suspicious HTML tags");
+          if (sanitize) {
+            meta.name.last_name = sanitizeInput(meta.name.last_name);
+          } else {
+            throw new Error("Last name contains suspicious HTML tags");
+          }
         }
         if (meta.name.middle_name && checkForHTMLTags(meta.name.middle_name)) {
-          throw new Error("Middle name contains suspicious HTML tags");
+          if (sanitize) {
+            meta.name.middle_name = sanitizeInput(meta.name.middle_name);
+          } else {
+            throw new Error("Middle name contains suspicious HTML tags");
+          }
         }
         if (meta.name.suffix && checkForHTMLTags(meta.name.suffix)) {
-          throw new Error("Suffix contains suspicious HTML tags");
+          if (sanitize) {
+            meta.name.suffix = sanitizeInput(meta.name.suffix);
+          } else {
+            throw new Error("Suffix contains suspicious HTML tags");
+          }
         }
       }
 
       if (meta.address) {
-        const addressFields = [
-          { name: "building", value: meta.address.building },
-          { name: "street", value: meta.address.street },
-          { name: "area", value: meta.address.area },
-          { name: "city", value: meta.address.city },
-          { name: "region", value: meta.address.region },
-          { name: "country", value: meta.address.country },
-        ];
-
-        for (const { name, value } of addressFields) {
-          if (value && checkForHTMLTags(value)) {
-            throw new Error(`Address ${name} contains suspicious HTML tags`);
+        if (meta.address.building && checkForHTMLTags(meta.address.building)) {
+          if (sanitize) {
+            meta.address.building = sanitizeInput(meta.address.building);
+          } else {
+            throw new Error("Address building contains suspicious HTML tags");
+          }
+        }
+        if (meta.address.street && checkForHTMLTags(meta.address.street)) {
+          if (sanitize) {
+            meta.address.street = sanitizeInput(meta.address.street);
+          } else {
+            throw new Error("Address street contains suspicious HTML tags");
+          }
+        }
+        if (meta.address.area && checkForHTMLTags(meta.address.area)) {
+          if (sanitize) {
+            meta.address.area = sanitizeInput(meta.address.area);
+          } else {
+            throw new Error("Address area contains suspicious HTML tags");
+          }
+        }
+        if (meta.address.city && checkForHTMLTags(meta.address.city)) {
+          if (sanitize) {
+            meta.address.city = sanitizeInput(meta.address.city);
+          } else {
+            throw new Error("Address city contains suspicious HTML tags");
+          }
+        }
+        if (meta.address.region && checkForHTMLTags(meta.address.region)) {
+          if (sanitize) {
+            meta.address.region = sanitizeInput(meta.address.region);
+          } else {
+            throw new Error("Address region contains suspicious HTML tags");
+          }
+        }
+        if (meta.address.country && checkForHTMLTags(meta.address.country)) {
+          if (sanitize) {
+            meta.address.country = sanitizeInput(meta.address.country);
+          } else {
+            throw new Error("Address country contains suspicious HTML tags");
           }
         }
       }
 
       if (meta.social_links) {
+        const sanitizedLinks: Record<string, string> = {};
         Object.entries(meta.social_links).forEach(([platform, url]) => {
+          let sanitizedPlatform = platform;
+          let sanitizedUrl = url as string;
+
           if (checkForHTMLTags(platform)) {
-            throw new Error(
-              `Social link platform contains suspicious HTML tags`,
-            );
+            if (sanitize) {
+              sanitizedPlatform = sanitizeInput(platform);
+            } else {
+              throw new Error(
+                `Social link platform contains suspicious HTML tags`,
+              );
+            }
           }
           if (checkForHTMLTags(url as string)) {
-            throw new Error(`Social link URL contains suspicious HTML tags`);
+            if (sanitize) {
+              sanitizedUrl = sanitizeInput(url as string);
+            } else {
+              throw new Error(`Social link URL contains suspicious HTML tags`);
+            }
           }
+
+          sanitizedLinks[sanitizedPlatform] = sanitizedUrl;
         });
+
+        if (sanitize) {
+          meta.social_links = sanitizedLinks;
+        }
       }
 
       if (meta.language && checkForHTMLTags(meta.language)) {
-        throw new Error("Language contains suspicious HTML tags");
+        if (sanitize) {
+          meta.language = sanitizeInput(meta.language);
+        } else {
+          throw new Error("Language contains suspicious HTML tags");
+        }
       }
 
       if (meta.timezone && checkForHTMLTags(meta.timezone)) {
-        throw new Error("Timezone contains suspicious HTML tags");
+        if (sanitize) {
+          meta.timezone = sanitizeInput(meta.timezone);
+        } else {
+          throw new Error("Timezone contains suspicious HTML tags");
+        }
       }
     }
   }
