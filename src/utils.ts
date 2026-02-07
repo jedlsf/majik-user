@@ -193,6 +193,11 @@ const DANGER_PATTERNS = [
 export function checkForHTMLTags(input: string): boolean {
   if (!input || typeof input !== "string" || !input.trim()) return false;
 
+  // First line of defense: pattern matching (fast and reliable)
+  const hasPatterns = DANGER_PATTERNS.some((pattern) => pattern.test(input));
+  if (hasPatterns) return true;
+
+  // Second line of defense: DOMPurify (if available)
   try {
     if (internalSanitize) {
       const clean = internalSanitize(input, {
@@ -202,8 +207,7 @@ export function checkForHTMLTags(input: string): boolean {
       return input.trim() !== clean.trim();
     }
   } catch (err) {
-    // Fallback: If DOMPurify is absent, trigger true if ANY danger pattern matches
-    return DANGER_PATTERNS.some((pattern) => pattern.test(input));
+    console.warn("DOMPurify check failed, relying on pattern matching");
   }
 
   return false;

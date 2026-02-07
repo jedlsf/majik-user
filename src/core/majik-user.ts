@@ -1025,6 +1025,13 @@ export class MajikUser<
    * Get a supabase ready version of user data (metadata)
    */
   toSupabaseJSON(): Record<string, unknown> {
+    const validation = this.validate();
+    if (!validation.isValid) {
+      throw new Error(
+        `Cannot export invalid user data: ${validation.errors.join(", ")}`,
+      );
+    }
+
     return stripUndefined({
       age: this.age,
       name: this.fullName,
