@@ -54,6 +54,17 @@ This package is designed to be the **isomorphic source of truth**—ensuring tha
     - [Updating a User (PUT `/api/users/:id`)](#updating-a-user-put-apiusersid)
       - [Why this pattern is recommended](#why-this-pattern-is-recommended)
   - [Philosophy](#philosophy)
+  - [Threat Model – Majik User](#threat-model--majik-user)
+    - [Assets Protected](#assets-protected)
+    - [Trust Boundaries](#trust-boundaries)
+    - [In-Scope Threats](#in-scope-threats)
+      - [1. Cross-Site Scripting (XSS)](#1-cross-site-scripting-xss)
+      - [2. Unsafe URL Injection](#2-unsafe-url-injection)
+      - [3. Accidental Data Exposure](#3-accidental-data-exposure)
+      - [4. State Mutation \& Integrity Bugs](#4-state-mutation--integrity-bugs)
+    - [Out-of-Scope Threats](#out-of-scope-threats)
+    - [Assumptions](#assumptions)
+    - [Security Posture Summary](#security-posture-summary)
   - [Contributing](#contributing)
   - [License](#license)
   - [Author](#author)
@@ -89,7 +100,7 @@ It is:
 ### Security & Integrity
 - **Plain-Text Enforcement:** HTML and unsafe markup are rejected or stripped from user-controlled fields.
 - **XSS Risk Mitigation:** Optional DOMPurify integration normalizes externally sourced input into safe plain text.
-- **Self-Defending Setters:** Setters validate and clean data in real-time before it reaches the internal state.
+- **Defensive Setters:** Setters validate and normalize data before it reaches internal state.
 - **Safe URI Enforcement:** Profile pictures and social links are restricted to safe protocols (`https, base64, etc.`), blocking javascript: injection.
 - **Readonly State:** Getters return deep copies or readonly versions of data to prevent accidental state mutation.
 
@@ -379,7 +390,8 @@ user.hasCompleteProfile();
 
 ### Validation
 
-This validates not just formats, but also scans the entire user object (including nested addresses and social links) for malicious HTML/XSS injection.
+This validates not just formats, but also inspects the entire user object (including nested addresses and social links) for unsafe markup and suspicious input.
+
 
 
 ```ts
@@ -477,12 +489,13 @@ Now your app has a fully typed, domain-safe user model.
 
 Majik User ensures that your data is not only well-structured but also safe and meaningful across your entire stack.
 
-| Feature                | Description                                                                          |
-| :--------------------- | :----------------------------------------------------------------------------------- |
-| **Isomorphic**         | Runs everywhere—Works seamlessly in the Browser, Node.js, and Edge Functions.        |
-| **Smart Mapping**      | Automatically normalizes messy, flat metadata into structured, nested objects.       |
-| **Calculated Getters** | Values like `.age`, `.initials`, and `.isFullyVerified` are computed on the fly.     |
-| **XSS-Proof**          | Integrated protection via `DOMPurify` on every setter to block malicious injections. |
+| Feature                | Description                                                                            |
+| :--------------------- | :------------------------------------------------------------------------------------- |
+| **Isomorphic**         | Runs everywhere—Works seamlessly in the Browser, Node.js, and Edge Functions.          |
+| **Smart Mapping**      | Automatically normalizes messy, flat metadata into structured, nested objects.         |
+| **Calculated Getters** | Values like `.age`, `.initials`, and `.isFullyVerified` are computed on the fly.       |
+| **XSS Risk Reduction** | Plain-text enforcement and optional DOMPurify normalization reduce XSS attack surface. |
+
 
 ---
 
@@ -701,6 +714,116 @@ It is:
 - A shared contract
 - A single source of truth for user behavior
 
+
+---
+
+## Threat Model – Majik User
+
+### Assets Protected
+
+Majik User is responsible for protecting:
+
+- User identity metadata (name, email, profile info)
+- User-controlled profile content (bio, social links, pictures)
+- Verification state (email, phone, identity flags)
+- Public-facing user representations (`toPublicJSON()`)
+
+---
+
+### Trust Boundaries
+
+Majik User operates across multiple trust boundaries:
+
+- External clients (browsers, mobile apps)
+- APIs and serverless functions
+- Authentication providers (e.g. Supabase Auth)
+- Databases and caches
+
+All data crossing into the Majik User domain is treated as **untrusted**.
+
+---
+
+### In-Scope Threats
+
+#### 1. Cross-Site Scripting (XSS)
+
+**Threat**  
+Attackers attempt to inject HTML or script content via user-controlled fields
+(e.g. display names, bios, metadata).
+
+**Mitigations**
+- Plain-text enforcement for user-facing fields
+- Rejection or normalization of unsafe markup
+- Optional DOMPurify integration for external data ingestion
+- Validation during initialization, mutation, and serialization
+
+**Residual Risk**
+- XSS is still possible if applications render user data unsafely
+  (e.g. `innerHTML` without escaping)
+
+#### 2. Unsafe URL Injection
+
+**Threat**  
+Injection of malicious URI schemes such as `javascript:` or `data:` URLs.
+
+**Mitigations**
+- Protocol allowlisting (`https`, controlled `data` usage)
+- URL parsing and validation before persistence
+
+#### 3. Accidental Data Exposure
+
+**Threat**  
+Sensitive fields being unintentionally exposed to public APIs or clients.
+
+**Mitigations**
+- Explicit separation of internal vs public serialization
+- `toPublicJSON()` exposes only whitelisted fields
+- Defensive defaults for getters
+
+
+#### 4. State Mutation & Integrity Bugs
+
+**Threat**  
+Unexpected mutation of internal user state causing data corruption or bypasses.
+
+**Mitigations**
+- Readonly getters and defensive cloning
+- Controlled setters with validation
+- Immutable-like update patterns
+
+### Out-of-Scope Threats
+
+Majik User does **not** attempt to protect against:
+
+- SQL injection
+- Authentication bypass
+- Authorization logic flaws
+- CSRF
+- Server-side request forgery (SSRF)
+- Business logic vulnerabilities
+- Client-side misuse of rendered data
+
+These must be handled by the surrounding application and infrastructure.
+
+### Assumptions
+
+- Consumers follow secure rendering practices
+- Frontend frameworks escape content by default
+- CSP is implemented where appropriate
+- The library is used as intended (domain layer, not UI sanitizer)
+
+Violating these assumptions may reintroduce risk.
+
+### Security Posture Summary
+
+Majik User reduces risk by:
+- Shrinking the XSS attack surface
+- Enforcing strict domain invariants
+- Making unsafe states difficult to represent
+
+It does **not** claim to eliminate vulnerabilities entirely.
+
+Security is a shared responsibility.
 
 ---
 
