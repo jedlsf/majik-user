@@ -2,7 +2,7 @@
 
 [![Developed by Zelijah](https://img.shields.io/badge/Developed%20by-Zelijah-red?logo=github&logoColor=white)](https://thezelijah.world) ![GitHub Sponsors](https://img.shields.io/github/sponsors/jedlsf?style=plastic&label=Sponsors&link=https%3A%2F%2Fgithub.com%2Fsponsors%2Fjedlsf)
 
-**Majik User** is a framework-agnostic, **self-defending** user domain model for modern applications. It provides a strongly typed foundation for managing identity, profile data, and settings, with built-in XSS protection and input sanitization baked directly into the class logic.
+**Majik User** is a framework-agnostic, **security-hardened** user domain model for modern applications. It provides a strongly typed foundation for managing identity, profile data, and settings, that enforces plain-text input, aggressively validates user-controlled fields, and reduces XSS risk by default through strict domain-level policies.
 
 This package is designed to be the **isomorphic source of truth**—ensuring that user data remains clean, validated, and secure as it moves between your frontend, backend, and database.
 
@@ -43,6 +43,9 @@ This package is designed to be the **isomorphic source of truth**—ensuring tha
       - [Public-safe JSON (no sensitive data)](#public-safe-json-no-sensitive-data)
   - [Extending Majik User](#extending-majik-user)
   - [Data Integrity \& Security](#data-integrity--security)
+  - [Security Guarantees \& Non-Guarantees](#security-guarantees--non-guarantees)
+    - [What Majik User guarantees](#what-majik-user-guarantees)
+    - [What Majik User does NOT guarantee](#what-majik-user-does-not-guarantee)
   - [Supabase Integration (Optional)](#supabase-integration-optional)
     - [Public Signup (POST `/api/users`)](#public-signup-post-apiusers)
       - [Why this works well](#why-this-works-well)
@@ -62,7 +65,7 @@ This package is designed to be the **isomorphic source of truth**—ensuring tha
 
 ## Why Majik User?
 
-**Secure by Default: Built-in XSS protection and protocol-safe URI validation—no "dirty" data enters your system.**
+**Secure by Default: Enforces a strict plain-text input policy, protocol-safe URI validation, and defensive sanitization for externally sourced data—reducing XSS risk at the domain layer.**
 
 Most apps scatter user logic across:
 - database schemas
@@ -84,7 +87,8 @@ It is:
 ## Features
 
 ### Security & Integrity
-- **XSS Defense:** Automatic sanitization of all string inputs using DOMPurify.
+- **Plain-Text Enforcement:** HTML and unsafe markup are rejected or stripped from user-controlled fields.
+- **XSS Risk Mitigation:** Optional DOMPurify integration normalizes externally sourced input into safe plain text.
 - **Self-Defending Setters:** Setters validate and clean data in real-time before it reaches the internal state.
 - **Safe URI Enforcement:** Profile pictures and social links are restricted to safe protocols (`https, base64, etc.`), blocking javascript: injection.
 - **Readonly State:** Getters return deep copies or readonly versions of data to prevent accidental state mutation.
@@ -479,6 +483,26 @@ Majik User ensures that your data is not only well-structured but also safe and 
 | **Smart Mapping**      | Automatically normalizes messy, flat metadata into structured, nested objects.       |
 | **Calculated Getters** | Values like `.age`, `.initials`, and `.isFullyVerified` are computed on the fly.     |
 | **XSS-Proof**          | Integrated protection via `DOMPurify` on every setter to block malicious injections. |
+
+---
+
+## Security Guarantees & Non-Guarantees
+
+Majik User is designed to **reduce risk**, not to provide absolute security guarantees.
+
+### What Majik User guarantees
+- User-controlled fields are treated as untrusted by default
+- HTML and unsafe markup are rejected or normalized into plain text
+- Public-facing data is intentionally limited and sanitized
+- Input validation is enforced across initialization, mutation, and serialization
+
+### What Majik User does NOT guarantee
+- Complete protection against XSS in rendering contexts
+- Safety against misuse (e.g. unsafe `innerHTML` usage)
+- Replacement for frontend escaping, CSP, or framework-level protections
+- Defense against logic bugs or application-level vulnerabilities
+
+Majik User is intended to be used as **one layer** in a defense-in-depth strategy.
 
 ---
 
