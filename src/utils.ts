@@ -219,9 +219,19 @@ export function checkForHTMLTags(input: string): boolean {
 export function sanitizeInput(input: string): string {
   if (!input || typeof input !== "string") return "";
 
+  // 1. Intercept standalone dangerous protocols at the very beginning
+  let cleaned = input;
+  if (/^\s*javascript:/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^\s*javascript:/i, "[removed]");
+  }
+  if (/^\s*data:/i.test(cleaned)) {
+    cleaned = cleaned.replace(/^\s*data:/i, "[removed]");
+  }
+
   try {
     if (internalSanitize) {
-      return internalSanitize(input, {
+      // 2. Pass the pre-cleaned string to DOMPurify for HTML/XSS tag stripping
+      return internalSanitize(cleaned, {
         ALLOWED_TAGS: [],
         ALLOWED_ATTR: [],
         KEEP_CONTENT: true,
@@ -229,15 +239,15 @@ export function sanitizeInput(input: string): string {
     }
   } catch (err) {
     // Hardened Fallback:
-    // 1. Remove specific dangerous protocols/attributes first
-    let hardened = input
+    // Remove specific dangerous protocols/attributes first
+    let hardened = cleaned
       .replace(/javascript:/gi, "[removed]")
-      .replace(/data:/gi, "[removed]") // Added this
+      .replace(/data:/gi, "[removed]")
       .replace(/onload=|onerror=|onclick=/gi, "prevented=");
 
-    // 2. Strip all remaining HTML tags
+    // Strip all remaining HTML tags
     return hardened.replace(/<[^>]*>/g, "").trim();
   }
 
-  return input.trim();
+  return cleaned.trim();
 }
