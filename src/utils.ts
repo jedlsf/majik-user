@@ -1,5 +1,3 @@
-import DOMPurify from "isomorphic-dompurify";
-
 /* ================================
  * Utilities
  * ================================ */
@@ -158,23 +156,121 @@ export function stripUndefined<T extends Record<string, unknown>>(
   ) as Partial<T>;
 }
 
-/**
- * 1. Safe Reference Resolver
- */
-const getSafeSanitizer = () => {
-  try {
-    const dp: any = DOMPurify;
-    const sanitize = dp?.sanitize || dp?.default?.sanitize;
-    if (typeof sanitize === "function") return sanitize;
-  } catch (e) {
-    console.warn(
-      "MajikUser: DOMPurify failed to init. Using hardened fallback.",
-    );
-  }
-  return null;
-};
+// ... arrayToBase64, base64ToUint8Array, arrayBufferToBase64, base64ToArrayBuffer,
+//     base64ToUtf8, utf8ToBase64, concatArrayBuffers, concatUint8Arrays,
+//     seedToJSON, jsonToSeed, seedStringToArray, dateToYYYYMMDD, YYYYMMDDToDate,
+//     stripUndefined — ALL UNCHANGED, keep as-is.
 
-const internalSanitize = getSafeSanitizer();
+/* ================================
+ * Optional Sanitizer (isomorphic-dompurify)
+ * ================================
+ * isomorphic-dompurify is an OPTIONAL peer dependency — it is NOT installed
+ * automatically and is NOT safe in every runtime (DOMPurify needs a real DOM,
+ * which doesn't exist in edge/isolate runtimes like Cloudflare Workers:
+ * see https://github.com/cure53/DOMPurify/issues/577).
+ *
+ * If it's installed and loadable here, MajikUser uses it for real
+ * parser-based HTML/XSS sanitization. If it's missing, or fails to load,
+ * MajikUser falls back to a regex-based sanitizer and logs one warning —
+ * it never throws.
+ */
+
+type SanitizeFn = (input: string, config?: Record<string, unknown>) => string;
+
+let sanitizerFn: SanitizeFn | null = null;
+let sanitizerChecked = false;
+let sanitizerLoadingPromise: Promise<void> | null = null;
+
+// Kept in a variable (not a string literal directly in `import(...)`) so
+// bundlers like esbuild (which Wrangler uses) don't try to statically
+// resolve/inline it and hard-fail the build when it's absent. This keeps
+// resolution deferred to runtime, where we can actually catch failure.
+const OPTIONAL_SANITIZER_PKG = "isomorphic-dompurify";
+
+async function loadOptionalSanitizer(): Promise<void> {
+  try {
+    const mod: any = await import(
+      /* webpackIgnore: true */
+      /* @vite-ignore */
+      OPTIONAL_SANITIZER_PKG
+    );
+    const dp = mod?.default ?? mod;
+    const fn = dp?.sanitize ?? dp?.default?.sanitize;
+
+    if (typeof fn !== "function") {
+      throw new Error(
+        "isomorphic-dompurify loaded but sanitize() was not found",
+      );
+    }
+    sanitizerFn = fn.bind(dp);
+  } catch {
+    sanitizerFn = null;
+    console.warn(
+      "[MajikUser] 'isomorphic-dompurify' is not installed or failed to load in this runtime. " +
+        "Falling back to the built-in regex-based sanitizer (weaker against sophisticated " +
+        "HTML/XSS payloads). To enable full DOMPurify sanitization, install it in your project:\n" +
+        "  npm install isomorphic-dompurify\n" +
+        "Note: it requires a real DOM and currently does not work in edge/isolate runtimes " +
+        "such as Cloudflare Workers.",
+    );
+  } finally {
+    sanitizerChecked = true;
+  }
+}
+
+function ensureSanitizerLoading(): Promise<void> {
+  if (!sanitizerLoadingPromise) {
+    sanitizerLoadingPromise = loadOptionalSanitizer();
+  }
+  return sanitizerLoadingPromise;
+}
+
+/**
+ * Optional: call and `await` this once at app/worker startup so the real
+ * sanitizer (if installed) is ready before the first request, avoiding a
+ * fallback on cold start. Returns true if DOMPurify is active.
+ *
+ * Cloudflare Worker example:
+ *   let ready: Promise<boolean> | null = null;
+ *   export default {
+ *     async fetch(req, env, ctx) {
+ *       ready ??= preloadMajikSanitizer();
+ *       await ready;
+ *       ...
+ *     }
+ *   }
+ */
+export async function preloadMajikSanitizer(): Promise<boolean> {
+  await ensureSanitizerLoading();
+  return sanitizerFn !== null;
+}
+
+// Fire-and-forget kick-off, so later (not the very first) sync calls in the
+// same process can benefit once the async load resolves.
+function kickOffLazyLoad(): void {
+  if (!sanitizerChecked && !sanitizerLoadingPromise) {
+    void ensureSanitizerLoading();
+  }
+}
+
+function regexCheckForHTMLTags(input: string): boolean {
+  return DANGER_PATTERNS.some((pattern) => pattern.test(input));
+}
+
+function regexSanitizeInput(input: string): string {
+  let cleaned = input;
+  if (/^\s*javascript:/i.test(cleaned))
+    cleaned = cleaned.replace(/^\s*javascript:/i, "[removed]");
+  if (/^\s*data:/i.test(cleaned))
+    cleaned = cleaned.replace(/^\s*data:/i, "[removed]");
+
+  return cleaned
+    .replace(/javascript:/gi, "[removed]")
+    .replace(/data:/gi, "[removed]")
+    .replace(/onload=|onerror=|onclick=/gi, "prevented=")
+    .replace(/<[^>]*>/g, "")
+    .trim();
+}
 
 /**
  * High-risk patterns for the fallback logic.
@@ -188,66 +284,59 @@ const DANGER_PATTERNS = [
 ];
 
 /**
- * 2. The Fail-Proof Validator
+ * Checks whether a string appears to contain HTML/XSS-risky content.
+ * Never throws — uses DOMPurify if loaded, else the regex fallback.
  */
 export function checkForHTMLTags(input: string): boolean {
   if (!input || typeof input !== "string" || !input.trim()) return false;
 
-  // First line of defense: pattern matching (fast and reliable)
-  const hasPatterns = DANGER_PATTERNS.some((pattern) => pattern.test(input));
-  if (hasPatterns) return true;
+  kickOffLazyLoad();
 
-  // Second line of defense: DOMPurify (if available)
-  try {
-    if (internalSanitize) {
-      const clean = internalSanitize(input, {
-        ALLOWED_TAGS: [],
-        ALLOWED_ATTR: [],
-      });
+  if (regexCheckForHTMLTags(input)) return true;
+
+  if (sanitizerFn) {
+    try {
+      const clean = sanitizerFn(input, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
       return input.trim() !== clean.trim();
+    } catch {
+      console.warn(
+        "[MajikUser] DOMPurify check failed at runtime, using regex fallback.",
+      );
     }
-  } catch (err) {
-    console.warn("DOMPurify check failed, relying on pattern matching");
   }
 
   return false;
 }
 
 /**
- * 3. The Fail-Proof Sanitizer
+ * Sanitizes a string, stripping HTML/XSS-risky content.
+ * Never throws — uses DOMPurify if loaded, else the regex fallback.
  */
 export function sanitizeInput(input: string): string {
   if (!input || typeof input !== "string") return "";
 
-  // 1. Intercept standalone dangerous protocols at the very beginning
-  let cleaned = input;
-  if (/^\s*javascript:/i.test(cleaned)) {
-    cleaned = cleaned.replace(/^\s*javascript:/i, "[removed]");
-  }
-  if (/^\s*data:/i.test(cleaned)) {
-    cleaned = cleaned.replace(/^\s*data:/i, "[removed]");
-  }
+  kickOffLazyLoad();
 
-  try {
-    if (internalSanitize) {
-      // 2. Pass the pre-cleaned string to DOMPurify for HTML/XSS tag stripping
-      return internalSanitize(cleaned, {
+  let cleaned = input;
+  if (/^\s*javascript:/i.test(cleaned))
+    cleaned = cleaned.replace(/^\s*javascript:/i, "[removed]");
+  if (/^\s*data:/i.test(cleaned))
+    cleaned = cleaned.replace(/^\s*data:/i, "[removed]");
+
+  if (sanitizerFn) {
+    try {
+      return sanitizerFn(cleaned, {
         ALLOWED_TAGS: [],
         ALLOWED_ATTR: [],
         KEEP_CONTENT: true,
       }).trim();
+    } catch {
+      console.warn(
+        "[MajikUser] DOMPurify sanitize failed at runtime, using regex fallback.",
+      );
+      return regexSanitizeInput(cleaned);
     }
-  } catch (err) {
-    // Hardened Fallback:
-    // Remove specific dangerous protocols/attributes first
-    let hardened = cleaned
-      .replace(/javascript:/gi, "[removed]")
-      .replace(/data:/gi, "[removed]")
-      .replace(/onload=|onerror=|onclick=/gi, "prevented=");
-
-    // Strip all remaining HTML tags
-    return hardened.replace(/<[^>]*>/g, "").trim();
   }
 
-  return cleaned.trim();
+  return regexSanitizeInput(cleaned);
 }
