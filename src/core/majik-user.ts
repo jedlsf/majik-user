@@ -1,10 +1,4 @@
-import {
-  arrayToBase64,
-  checkForHTMLTags,
-  dateToYYYYMMDD,
-  sanitizeInput,
-  stripUndefined,
-} from "../utils";
+import { arrayToBase64, dateToYYYYMMDD, stripUndefined } from "../utils.js";
 
 import { v4 as uuidv4 } from "uuid";
 import { hash } from "@stablelib/sha256";
@@ -18,8 +12,15 @@ import type {
   SupabaseUser,
   YYYYMMDD,
   MajikUserPublicJSON,
-} from "../types";
-import type { UserGenderOptions } from "../enums";
+} from "../types.js";
+import { UserGenderOptions } from "../enums.js";
+import {
+  assertSafeObjectKey,
+  checkForHTMLTags,
+  deepSanitize,
+  isPlainObject,
+  sanitizeInput,
+} from "./sanitize.js";
 
 // Make MajikUser generic to accept extended metadata
 export interface MajikUserData<
@@ -42,24 +43,58 @@ export interface MajikUserData<
 export class MajikUser<
   TMetadata extends UserBasicInformation = UserBasicInformation,
 > {
-  readonly id: string;
+  private readonly _id: string;
+
   protected _email: string;
   protected _displayName: string;
   protected _hash: string;
   protected _metadata: TMetadata;
   protected _settings: UserSettings;
-  readonly createdAt: Date;
+  private readonly _createdAt: Date;
   protected _lastUpdate: Date;
 
   constructor(data: MajikUserData<TMetadata>) {
-    this.id = data.id;
-    this._email = data.email;
-    this._displayName = data.displayName;
-    this._hash = data.hash;
-    this._metadata = { ...data.metadata };
-    this._settings = { ...data.settings };
-    this.createdAt = new Date(data.createdAt);
-    this._lastUpdate = new Date(data.lastUpdate);
+    if (!data || typeof data !== "object") {
+      throw new Error("Invalid user data");
+    }
+
+    const normalized: any = {
+      id: data.id,
+      email: data.email,
+      displayName: data.displayName,
+      hash: data.hash,
+      metadata: data.metadata ?? {},
+      settings: data.settings ?? {
+        notifications: true,
+        system: {
+          isRestricted: false,
+        },
+      },
+      createdAt: data.createdAt,
+      lastUpdate: data.lastUpdate,
+    };
+
+    MajikUser.validateAndSanitizeUserData(normalized, true);
+
+    this._id = normalized.id;
+    this._email = normalized.email;
+    this._displayName = normalized.displayName;
+    this._hash = normalized.hash;
+
+    this._metadata = deepSanitize(normalized.metadata) as TMetadata;
+
+    this._settings = deepSanitize(normalized.settings) as UserSettings;
+
+    this._createdAt = new Date(normalized.createdAt);
+    this._lastUpdate = new Date(normalized.lastUpdate);
+  }
+
+  get id(): string {
+    return this._id;
+  }
+
+  get createdAt(): Date {
+    return new Date(this._createdAt.getTime());
   }
 
   // ==================== STATIC FACTORY METHODS ====================
@@ -120,37 +155,101 @@ export class MajikUser<
     this: new (data: MajikUserData<any>) => T,
     json: MajikUserJSON<any> | string,
   ): T {
-    // Parse string to object if needed
-    const data = typeof json === "string" ? JSON.parse(json) : json;
+    let data: any;
 
-    if (!data.id || typeof data.id !== "string") {
+    try {
+      data = typeof json === "string" ? JSON.parse(json) : json;
+    } catch {
+      throw new Error("Invalid user JSON");
+    }
+
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error("Invalid user data");
+    }
+
+    if (typeof data.id !== "string" || !data.id) {
       throw new Error("Invalid user data: missing or invalid id");
     }
-    if (!data.email || typeof data.email !== "string") {
+
+    if (typeof data.email !== "string" || !data.email) {
       throw new Error("Invalid user data: missing or invalid email");
     }
-    if (!data.displayName || typeof data.displayName !== "string") {
+
+    if (typeof data.displayName !== "string" || !data.displayName) {
       throw new Error("Invalid user data: missing or invalid displayName");
     }
-    if (!data.hash || typeof data.hash !== "string") {
+
+    if (typeof data.hash !== "string" || !data.hash) {
       throw new Error("Invalid user data: missing or invalid hash");
     }
 
-    const userData = {
+    /*
+     * Explicitly reject malformed metadata/settings.
+     * Arrays are NOT acceptable containers.
+     */
+    if (data.metadata !== undefined && !isPlainObject(data.metadata)) {
+      throw new Error("Invalid metadata object");
+    }
+
+    if (data.settings !== undefined && !isPlainObject(data.settings)) {
+      throw new Error("Invalid settings object");
+    }
+
+    MajikUser.validateIDValue(data.id);
+    MajikUser.validateEmailValue(data.email);
+
+    const expectedHash = MajikUser.hashID(data.id);
+
+    if (data.hash !== expectedHash) {
+      throw new Error("Invalid user data: hash mismatch");
+    }
+
+    const createdAt =
+      data.createdAt === undefined ? new Date() : new Date(data.createdAt);
+
+    if (Number.isNaN(createdAt.getTime())) {
+      throw new Error("Invalid createdAt date");
+    }
+
+    const lastUpdate =
+      data.lastUpdate === undefined ? new Date() : new Date(data.lastUpdate);
+
+    if (Number.isNaN(lastUpdate.getTime())) {
+      throw new Error("Invalid lastUpdate date");
+    }
+
+    const metadata = data.metadata ?? {};
+
+    const settings = data.settings ?? {
+      notifications: true,
+      system: {
+        isRestricted: false,
+      },
+    };
+
+    const userData: MajikUserData<any> = {
       id: data.id,
       email: data.email,
-      displayName: data.displayName,
+
+      /*
+       * Deserialized data is untrusted.
+       * Sanitize displayName before it reaches state.
+       */
+      displayName: sanitizeInput(data.displayName),
+
       hash: data.hash,
-      metadata: data.metadata || {},
-      settings: data.settings || {
-        notifications: true,
-        system: {
-          isRestricted: false,
-        },
-      },
-      createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
-      lastUpdate: data.lastUpdate ? new Date(data.lastUpdate) : new Date(),
+
+      metadata: deepSanitize(metadata),
+
+      settings: deepSanitize(settings),
+
+      createdAt,
+      lastUpdate,
     };
+
+    if (!userData.displayName.trim()) {
+      throw new Error("Display name cannot be empty");
+    }
 
     MajikUser.validateAndSanitizeUserData(userData, true);
 
@@ -283,11 +382,11 @@ export class MajikUser<
   }
 
   get metadata(): Readonly<TMetadata> {
-    return { ...this._metadata };
+    return deepSanitize(this._metadata);
   }
 
   get settings(): Readonly<UserSettings> {
-    return { ...this._settings };
+    return deepSanitize(this._settings);
   }
 
   get lastUpdate(): Date {
@@ -306,8 +405,11 @@ export class MajikUser<
   }
 
   get fullNameObject(): FullName | null {
-    if (!this._metadata.name) return null;
-    return this._metadata.name;
+    if (!this._metadata.name) {
+      return null;
+    }
+
+    return deepSanitize(this._metadata.name);
   }
 
   set fullNameObject(name: FullName) {
@@ -491,13 +593,19 @@ export class MajikUser<
   }
 
   set hash(value: string) {
-    if (!value || value.length === 0) {
+    if (!value || typeof value !== "string") {
       throw new Error("Hash cannot be empty");
     }
+
+    const expected = MajikUser.hashID(this._id);
+
+    if (value !== expected) {
+      throw new Error("Hash does not match user ID");
+    }
+
     this._hash = value;
     this.updateTimestamp();
   }
-
   // ==================== METADATA METHODS ====================
 
   /**
@@ -524,14 +632,27 @@ export class MajikUser<
    * Update user's profile picture
    */
   setPicture(url: string): void {
-    // Simple check: if it's not a relative path, ensure it's http/https/base64
-    const isSafeProtocol = /^(https?:\/\/|data:image\/|\/|#)/i.test(url);
-    if (!isSafeProtocol && url.length > 0) {
-      throw new Error("Invalid or unsafe URL protocol detected.");
+    if (typeof url !== "string") {
+      throw new Error("Invalid picture URL");
     }
-    this.updateMetadata({ picture: url } as Partial<TMetadata>);
-  }
 
+    /*
+     * Validate the original URL before any generic text
+     * sanitizer is applied.
+     */
+    MajikUser.validatePictureURL(url);
+
+    /*
+     * Do not pass an allowed raster data URI through the
+     * generic data: protocol sanitizer.
+     */
+    this._metadata.picture = url as TMetadata[Extract<
+      keyof TMetadata,
+      "picture"
+    >];
+
+    this.updateTimestamp();
+  }
   /**
    * Update user's phone number
    */
@@ -595,7 +716,13 @@ export class MajikUser<
    * Update user's address
    */
   setGender(gender: UserGenderOptions): void {
-    this.updateMetadata({ gender } as Partial<TMetadata>);
+    if (!Object.values(UserGenderOptions).includes(gender as any)) {
+      throw new Error("Invalid gender");
+    }
+
+    this.updateMetadata({
+      gender,
+    } as Partial<TMetadata>);
   }
 
   /**
@@ -659,131 +786,147 @@ export class MajikUser<
    * Update a specific metadata field
    */
   setMetadata(key: keyof TMetadata, value: TMetadata[typeof key]): void {
-    let finalValue = value;
-
-    // If the value being set is a string, sanitize it first
-    if (typeof value === "string") {
-      finalValue = sanitizeInput(value) as TMetadata[typeof key];
+    if (typeof key !== "string") {
+      throw new Error("Metadata key must be a string");
     }
-    this._metadata[key] = finalValue;
+
+    assertSafeObjectKey(key);
+
+    // Verification state is security-sensitive and must only be changed
+    // through the dedicated verification methods.
+    if (key === "verification") {
+      throw new Error(
+        "Verification metadata cannot be modified through setMetadata",
+      );
+    }
+
+    const safeValue = deepSanitize(value);
+
+    if (key === "picture" && typeof safeValue === "string") {
+      MajikUser.validatePictureURL(safeValue);
+    }
+
+    if (key === "social_links") {
+      MajikUser.validateSocialLinks(safeValue);
+    }
+
+    this._metadata[key] = safeValue as TMetadata[typeof key];
     this.updateTimestamp();
   }
+
   /**
    * Merge multiple metadata fields
    */
   updateMetadata(updates: Partial<TMetadata>): void {
-    this._metadata = { ...this._metadata, ...updates };
+    if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
+      throw new Error("Metadata updates must be a plain object");
+    }
+
+    for (const key of Object.keys(updates)) {
+      assertSafeObjectKey(key);
+
+      if (key === "verification") {
+        throw new Error(
+          "Verification metadata cannot be modified through updateMetadata",
+        );
+      }
+    }
+
+    const safeUpdates: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(updates)) {
+      /*
+       * Picture gets specialized URL validation.
+       */
+      if (key === "picture") {
+        if (typeof value !== "string") {
+          throw new Error("Invalid picture URL");
+        }
+
+        MajikUser.validatePictureURL(value);
+
+        safeUpdates[key] = value;
+        continue;
+      }
+
+      /*
+       * Everything else receives recursive sanitization.
+       */
+      safeUpdates[key] = deepSanitize(value);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(safeUpdates, "social_links")) {
+      MajikUser.validateSocialLinks(safeUpdates.social_links);
+    }
+
+    this._metadata = {
+      ...this._metadata,
+      ...(safeUpdates as Partial<TMetadata>),
+    };
+
     this.updateTimestamp();
   }
 
   // ==================== VERIFICATION METHODS ====================
 
-  /**
-   * Mark email as verified
-   */
+  private updateVerificationState(
+    patch: Partial<{
+      email_verified: boolean;
+      phone_verified: boolean;
+      identity_verified: boolean;
+    }>,
+  ): void {
+    const current = this._metadata.verification ?? {
+      email_verified: false,
+      phone_verified: false,
+      identity_verified: false,
+    };
+
+    this._metadata = {
+      ...this._metadata,
+      verification: {
+        ...current,
+        ...patch,
+      },
+    } as TMetadata;
+
+    this.updateTimestamp();
+  }
+
   verifyEmail(): void {
-    const currentVerification = this._metadata.verification || {
-      email_verified: false,
-      phone_verified: false,
-      identity_verified: false,
-    };
-
-    this.updateMetadata({
-      verification: {
-        ...currentVerification,
-        email_verified: true,
-      },
-    } as Partial<TMetadata>);
+    this.updateVerificationState({
+      email_verified: true,
+    });
   }
 
-  /**
-   * Mark email as unverified
-   */
   unverifyEmail(): void {
-    const currentVerification = this._metadata.verification || {
+    this.updateVerificationState({
       email_verified: false,
-      phone_verified: false,
-      identity_verified: false,
-    };
-
-    this.updateMetadata({
-      verification: {
-        ...currentVerification,
-        email_verified: false,
-      },
-    } as Partial<TMetadata>);
+    });
   }
 
-  /**
-   * Mark phone as verified
-   */
   verifyPhone(): void {
-    const currentVerification = this._metadata.verification || {
-      email_verified: false,
-      phone_verified: false,
-      identity_verified: false,
-    };
-
-    this.updateMetadata({
-      verification: {
-        ...currentVerification,
-        phone_verified: true,
-      },
-    } as Partial<TMetadata>);
+    this.updateVerificationState({
+      phone_verified: true,
+    });
   }
 
-  /**
-   * Mark phone as unverified
-   */
   unverifyPhone(): void {
-    const currentVerification = this._metadata.verification || {
-      email_verified: false,
+    this.updateVerificationState({
       phone_verified: false,
-      identity_verified: false,
-    };
-
-    this.updateMetadata({
-      verification: {
-        ...currentVerification,
-        phone_verified: false,
-      },
-    } as Partial<TMetadata>);
+    });
   }
 
-  /**
-   * Mark identity as verified (KYC)
-   */
   verifyIdentity(): void {
-    const currentVerification = this._metadata.verification || {
-      email_verified: false,
-      phone_verified: false,
-      identity_verified: false,
-    };
-
-    this.updateMetadata({
-      verification: {
-        ...currentVerification,
-        identity_verified: true,
-      },
-    } as Partial<TMetadata>);
+    this.updateVerificationState({
+      identity_verified: true,
+    });
   }
 
-  /**
-   * Mark identity as unverified
-   */
   unverifyIdentity(): void {
-    const currentVerification = this._metadata.verification || {
-      email_verified: false,
-      phone_verified: false,
+    this.updateVerificationState({
       identity_verified: false,
-    };
-
-    this.updateMetadata({
-      verification: {
-        ...currentVerification,
-        identity_verified: false,
-      },
-    } as Partial<TMetadata>);
+    });
   }
 
   // ==================== SETTINGS METHODS ====================
@@ -792,7 +935,15 @@ export class MajikUser<
    * Update a specific setting
    */
   setSetting(key: string, value: unknown): void {
-    this._settings[key] = value;
+    if (typeof key !== "string" || key.length === 0) {
+      throw new Error("Setting key must be a non-empty string");
+    }
+
+    assertSafeObjectKey(key);
+
+    const safeValue = deepSanitize(value);
+
+    this._settings[key] = safeValue;
     this.updateTimestamp();
   }
 
@@ -800,14 +951,25 @@ export class MajikUser<
    * Merge multiple settings
    */
   updateSettings(updates: Partial<UserSettings>): void {
+    if (!updates || typeof updates !== "object") {
+      throw new Error("Settings updates must be an object");
+    }
+
+    for (const key of Object.keys(updates)) {
+      assertSafeObjectKey(key);
+    }
+
+    const safeUpdates = deepSanitize(updates) as Partial<UserSettings>;
+
     this._settings = {
       ...this._settings,
-      ...updates,
+      ...safeUpdates,
       system: {
         ...this._settings.system,
-        ...(updates.system || {}),
+        ...(safeUpdates.system || {}),
       },
     };
+
     this.updateTimestamp();
   }
 
@@ -1011,13 +1173,13 @@ export class MajikUser<
   clone(): MajikUser<TMetadata> {
     return new (this.constructor as typeof MajikUser)({
       id: this.id,
-      email: this._email,
-      displayName: this._displayName,
-      hash: this._hash,
-      metadata: { ...this._metadata },
-      settings: { ...this._settings },
+      email: this.email,
+      displayName: this.displayName,
+      hash: this.hash,
+      metadata: deepSanitize(this._metadata),
+      settings: deepSanitize(this._settings),
       createdAt: this.createdAt,
-      lastUpdate: this._lastUpdate,
+      lastUpdate: this.lastUpdate,
     });
   }
 
@@ -1053,10 +1215,16 @@ export class MajikUser<
   toPublicJSON(): MajikUserPublicJSON {
     return {
       id: this.id,
-      displayName: this._displayName,
-      picture: this._metadata.picture,
-      bio: this._metadata.bio,
-      createdAt: this.createdAt.toISOString(),
+      displayName: sanitizeInput(this._displayName),
+      picture:
+        typeof this._metadata.picture === "string"
+          ? sanitizeInput(this._metadata.picture)
+          : undefined,
+      bio:
+        typeof this._metadata.bio === "string"
+          ? sanitizeInput(this._metadata.bio)
+          : undefined,
+      createdAt: this._createdAt.toISOString(),
     };
   }
 
@@ -1064,18 +1232,33 @@ export class MajikUser<
    * Serialize user to JSON-compatible object
    */
   toJSON(): MajikUserJSON<TMetadata> {
+    MajikUser.validateEmailValue(this._email);
+
+    const expectedHash = MajikUser.hashID(this._id);
+
+    if (this._hash !== expectedHash) {
+      throw new Error("User hash integrity check failed");
+    }
+
+    if (Number.isNaN(this._createdAt.getTime())) {
+      throw new Error("Invalid createdAt date");
+    }
+
+    if (Number.isNaN(this._lastUpdate.getTime())) {
+      throw new Error("Invalid lastUpdate date");
+    }
+
     return {
-      id: this.id,
+      id: this._id,
       email: this._email,
-      displayName: this._displayName,
+      displayName: sanitizeInput(this._displayName),
       hash: this._hash,
-      metadata: { ...this._metadata },
-      settings: { ...this._settings },
-      createdAt: this.createdAt.toISOString(),
+      metadata: deepSanitize(this._metadata),
+      settings: deepSanitize(this._settings),
+      createdAt: this._createdAt.toISOString(),
       lastUpdate: this._lastUpdate.toISOString(),
     };
   }
-
   // ==================== PROTECTED HELPER METHODS ====================
 
   /**
@@ -1089,7 +1272,29 @@ export class MajikUser<
    * Validates email format
    */
   protected validateEmail(email: string): void {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    MajikUser.validateEmailValue(email);
+  }
+
+  private static validateEmailValue(email: string): void {
+    if (typeof email !== "string" || email.length === 0 || email.length > 254) {
+      throw new Error("Invalid email format");
+    }
+
+    if (email !== email.trim()) {
+      throw new Error("Invalid email format");
+    }
+
+    if (/[\r\n\t]/.test(email)) {
+      throw new Error("Invalid email format");
+    }
+
+    if (checkForHTMLTags(email)) {
+      throw new Error("Invalid email format");
+    }
+
+    const emailRegex =
+      /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+
     if (!emailRegex.test(email)) {
       throw new Error("Invalid email format");
     }
@@ -1124,6 +1329,81 @@ export class MajikUser<
     const hashedID = hash(new TextEncoder().encode(id));
     return arrayToBase64(hashedID);
   }
+  private static validatePictureURL(url: string): void {
+    if (!url) {
+      return;
+    }
+
+    // Local/relative references.
+    if (/^(?:\/|#)/.test(url)) {
+      return;
+    }
+
+    // HTTP(S).
+    if (/^https?:\/\//i.test(url)) {
+      try {
+        const parsed = new URL(url);
+
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          throw new Error();
+        }
+
+        return;
+      } catch {
+        throw new Error("Invalid or unsafe URL protocol detected.");
+      }
+    }
+
+    /*
+     * Only permit raster image data URLs.
+     *
+     * SVG is deliberately excluded because SVG is an
+     * active document format and can contain scripting/
+     * event-handler content.
+     */
+    const safeRasterDataUrl =
+      /^data:image\/(?:png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/i;
+
+    if (safeRasterDataUrl.test(url)) {
+      return;
+    }
+
+    throw new Error("Invalid or unsafe URL protocol detected.");
+  }
+
+  private static validateSocialLinks(value: unknown): void {
+    if (value === undefined) {
+      return;
+    }
+
+    if (!isPlainObject(value)) {
+      throw new Error("Invalid social links object");
+    }
+
+    for (const [platform, url] of Object.entries(value)) {
+      assertSafeObjectKey(platform);
+
+      if (checkForHTMLTags(platform)) {
+        throw new Error("Social link platform contains suspicious content");
+      }
+
+      if (typeof url !== "string") {
+        throw new Error(`Social link URL for ${platform} must be a string`);
+      }
+
+      if (checkForHTMLTags(url)) {
+        throw new Error(
+          `Social link URL for ${platform} contains suspicious content`,
+        );
+      }
+
+      if (url && !/^(?:https?:\/\/|\/|#)/i.test(url)) {
+        throw new Error(
+          `Social link URL for ${platform} uses an unsafe protocol`,
+        );
+      }
+    }
+  }
 
   /**
    * Validate and sanitize user data from external sources
@@ -1132,149 +1412,201 @@ export class MajikUser<
     data: Partial<MajikUserData<any>>,
     sanitize = false,
   ): void {
-    // Validate displayName
-    if (data.displayName && checkForHTMLTags(data.displayName)) {
+    if (!data || typeof data !== "object") {
+      throw new Error("Invalid user data");
+    }
+
+    if (typeof data.id !== "string" || !data.id) {
+      throw new Error("Invalid user ID");
+    }
+
+    MajikUser.validateIDValue(data.id);
+
+    if (typeof data.email !== "string" || !data.email) {
+      throw new Error("Invalid email");
+    }
+
+    MajikUser.validateEmailValue(data.email);
+
+    if (typeof data.displayName !== "string" || !data.displayName.trim()) {
+      throw new Error("Display name cannot be empty");
+    }
+
+    if (sanitize) {
+      data.displayName = sanitizeInput(data.displayName);
+    } else if (checkForHTMLTags(data.displayName)) {
+      throw new Error("Display name contains suspicious HTML tags");
+    }
+
+    if (typeof data.hash !== "string" || !data.hash) {
+      throw new Error("Hash cannot be empty");
+    }
+
+    const expectedHash = MajikUser.hashID(data.id);
+
+    if (data.hash !== expectedHash) {
+      throw new Error("Hash does not match user ID");
+    }
+
+    if (!(data.createdAt instanceof Date)) {
+      throw new Error("Invalid createdAt date");
+    }
+
+    if (Number.isNaN(data.createdAt.getTime())) {
+      throw new Error("Invalid createdAt date");
+    }
+
+    if (!(data.lastUpdate instanceof Date)) {
+      throw new Error("Invalid lastUpdate date");
+    }
+
+    if (Number.isNaN(data.lastUpdate.getTime())) {
+      throw new Error("Invalid lastUpdate date");
+    }
+
+    if (data.metadata !== undefined && !isPlainObject(data.metadata)) {
+      throw new Error("Invalid metadata object");
+    }
+
+    if (data.settings !== undefined && !isPlainObject(data.settings)) {
+      throw new Error("Invalid settings object");
+    }
+
+    if (data.metadata) {
       if (sanitize) {
-        data.displayName = sanitizeInput(data.displayName);
+        data.metadata = deepSanitize(data.metadata);
       } else {
-        throw new Error("Display name contains suspicious HTML tags");
+        const safe = deepSanitize(data.metadata);
+
+        if (JSON.stringify(safe) !== JSON.stringify(data.metadata)) {
+          throw new Error("Unsafe metadata content detected");
+        }
       }
     }
 
-    // Validate metadata fields
-    if (data.metadata) {
-      const meta = data.metadata;
+    if (data.settings) {
+      if (sanitize) {
+        data.settings = deepSanitize(data.settings);
+      } else {
+        const safe = deepSanitize(data.settings);
 
-      if (meta.bio && checkForHTMLTags(meta.bio)) {
-        if (sanitize) {
-          meta.bio = sanitizeInput(meta.bio);
-        } else {
-          throw new Error("Bio contains suspicious HTML tags");
+        if (JSON.stringify(safe) !== JSON.stringify(data.settings)) {
+          throw new Error("Unsafe settings content detected");
         }
       }
+    }
 
-      if (meta.name) {
-        if (meta.name.first_name && checkForHTMLTags(meta.name.first_name)) {
-          if (sanitize) {
-            meta.name.first_name = sanitizeInput(meta.name.first_name);
-          } else {
-            throw new Error("First name contains suspicious HTML tags");
-          }
-        }
-        if (meta.name.last_name && checkForHTMLTags(meta.name.last_name)) {
-          if (sanitize) {
-            meta.name.last_name = sanitizeInput(meta.name.last_name);
-          } else {
-            throw new Error("Last name contains suspicious HTML tags");
-          }
-        }
-        if (meta.name.middle_name && checkForHTMLTags(meta.name.middle_name)) {
-          if (sanitize) {
-            meta.name.middle_name = sanitizeInput(meta.name.middle_name);
-          } else {
-            throw new Error("Middle name contains suspicious HTML tags");
-          }
-        }
-        if (meta.name.suffix && checkForHTMLTags(meta.name.suffix)) {
-          if (sanitize) {
-            meta.name.suffix = sanitizeInput(meta.name.suffix);
-          } else {
-            throw new Error("Suffix contains suspicious HTML tags");
-          }
-        }
+    const metadata: any = data.metadata || {};
+
+    // Validate known metadata types.
+    for (const field of [
+      "bio",
+      "picture",
+      "phone",
+      "language",
+      "timezone",
+      "gender",
+      "pronouns",
+    ]) {
+      if (
+        metadata[field] !== undefined &&
+        typeof metadata[field] !== "string"
+      ) {
+        throw new Error(`Invalid metadata.${field}`);
+      }
+    }
+
+    if (
+      metadata.birthdate !== undefined &&
+      typeof metadata.birthdate !== "string"
+    ) {
+      throw new Error("Invalid birthdate");
+    }
+
+    if (metadata.birthdate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(metadata.birthdate)) {
+        throw new Error("Invalid birthdate format");
+      }
+    }
+
+    if (metadata.picture !== undefined) {
+      MajikUser.validatePictureURL(metadata.picture);
+    }
+
+    if (metadata.social_links !== undefined) {
+      MajikUser.validateSocialLinks(metadata.social_links);
+    }
+
+    if (metadata.name !== undefined) {
+      if (!isPlainObject(metadata.name)) {
+        throw new Error("Invalid metadata.name");
       }
 
-      if (meta.address) {
-        if (meta.address.building && checkForHTMLTags(meta.address.building)) {
-          if (sanitize) {
-            meta.address.building = sanitizeInput(meta.address.building);
-          } else {
-            throw new Error("Address building contains suspicious HTML tags");
-          }
-        }
-        if (meta.address.street && checkForHTMLTags(meta.address.street)) {
-          if (sanitize) {
-            meta.address.street = sanitizeInput(meta.address.street);
-          } else {
-            throw new Error("Address street contains suspicious HTML tags");
-          }
-        }
-        if (meta.address.area && checkForHTMLTags(meta.address.area)) {
-          if (sanitize) {
-            meta.address.area = sanitizeInput(meta.address.area);
-          } else {
-            throw new Error("Address area contains suspicious HTML tags");
-          }
-        }
-        if (meta.address.city && checkForHTMLTags(meta.address.city)) {
-          if (sanitize) {
-            meta.address.city = sanitizeInput(meta.address.city);
-          } else {
-            throw new Error("Address city contains suspicious HTML tags");
-          }
-        }
-        if (meta.address.region && checkForHTMLTags(meta.address.region)) {
-          if (sanitize) {
-            meta.address.region = sanitizeInput(meta.address.region);
-          } else {
-            throw new Error("Address region contains suspicious HTML tags");
-          }
-        }
-        if (meta.address.country && checkForHTMLTags(meta.address.country)) {
-          if (sanitize) {
-            meta.address.country = sanitizeInput(meta.address.country);
-          } else {
-            throw new Error("Address country contains suspicious HTML tags");
-          }
+      for (const field of [
+        "first_name",
+        "last_name",
+        "middle_name",
+        "suffix",
+      ]) {
+        if (
+          metadata.name[field] !== undefined &&
+          typeof metadata.name[field] !== "string"
+        ) {
+          throw new Error(`Invalid metadata.name.${field}`);
         }
       }
+    }
 
-      if (meta.social_links) {
-        const sanitizedLinks: Record<string, string> = {};
-        Object.entries(meta.social_links).forEach(([platform, url]) => {
-          let sanitizedPlatform = platform;
-          let sanitizedUrl = url as string;
-
-          if (checkForHTMLTags(platform)) {
-            if (sanitize) {
-              sanitizedPlatform = sanitizeInput(platform);
-            } else {
-              throw new Error(
-                `Social link platform contains suspicious HTML tags`,
-              );
-            }
-          }
-          if (checkForHTMLTags(url as string)) {
-            if (sanitize) {
-              sanitizedUrl = sanitizeInput(url as string);
-            } else {
-              throw new Error(`Social link URL contains suspicious HTML tags`);
-            }
-          }
-
-          sanitizedLinks[sanitizedPlatform] = sanitizedUrl;
-        });
-
-        if (sanitize) {
-          meta.social_links = sanitizedLinks;
-        }
+    if (metadata.address !== undefined) {
+      if (!isPlainObject(metadata.address)) {
+        throw new Error("Invalid metadata.address");
       }
 
-      if (meta.language && checkForHTMLTags(meta.language)) {
-        if (sanitize) {
-          meta.language = sanitizeInput(meta.language);
-        } else {
-          throw new Error("Language contains suspicious HTML tags");
+      for (const field of [
+        "building",
+        "street",
+        "area",
+        "city",
+        "region",
+        "zip",
+        "country",
+      ]) {
+        if (
+          metadata.address[field] !== undefined &&
+          typeof metadata.address[field] !== "string"
+        ) {
+          throw new Error(`Invalid metadata.address.${field}`);
         }
+      }
+    }
+
+    if (metadata.verification !== undefined) {
+      if (!isPlainObject(metadata.verification)) {
+        throw new Error("Invalid verification metadata");
       }
 
-      if (meta.timezone && checkForHTMLTags(meta.timezone)) {
-        if (sanitize) {
-          meta.timezone = sanitizeInput(meta.timezone);
-        } else {
-          throw new Error("Timezone contains suspicious HTML tags");
+      for (const field of [
+        "email_verified",
+        "phone_verified",
+        "identity_verified",
+      ]) {
+        if (
+          metadata.verification[field] !== undefined &&
+          typeof metadata.verification[field] !== "boolean"
+        ) {
+          throw new Error(`Invalid verification.${field}`);
         }
       }
+    }
+  }
+
+  private static validateIDValue(id: string): void {
+    if (typeof id !== "string" || id.length === 0 || id.length > 256) {
+      throw new Error("Invalid user ID");
+    }
+
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:@+\/=-]{0,255}$/.test(id)) {
+      throw new Error("Invalid user ID");
     }
   }
 }

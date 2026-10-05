@@ -1,4 +1,4 @@
-export * from "./enums";
-export type * from "./types";
-export * from "./core/majik-user";
-export * from "./utils";
+export * from "./enums.js";
+export type * from "./types.js";
+export * from "./core/majik-user.js";
+export * from "./utils.js";

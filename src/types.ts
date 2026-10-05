@@ -1,4 +1,4 @@
-import type { UserGenderOptions } from "./enums";
+import type { UserGenderOptions } from "./enums.js";
 
 export type ISODateString = string;
 export type MajikUserID = string;

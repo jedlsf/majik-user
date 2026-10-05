@@ -8,6 +8,13 @@
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
   "files": [
     "dist"
   ],
@@ -53,7 +60,9 @@
     "prepublishOnly": "npm run build",
     "package": "npm run build && npm version patch && git push && git push --tags",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:sec": "vitest run test/security.test.ts",
+    "test:core": "vitest run test/majik-user.test.ts"
   },
   "dependencies": {
     "@stablelib/sha256": "^2.0.1",
@@ -66,7 +75,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
   }
 }

@@ -228,7 +228,9 @@ describe("MajikUser SDK", () => {
       ).not.toThrow();
       expect(() => user.setPicture("/local/avatar.png")).not.toThrow();
       expect(() =>
-        user.setPicture("data:image/png;base64,iVBORw0KGgo..."),
+        user.setPicture(
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        ),
       ).not.toThrow();
     });
 
